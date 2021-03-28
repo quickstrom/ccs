@@ -1,5 +1,47 @@
-
-BUFFER = 'in(x).out(x).BUFFER;
-
-
-
+// basic clocks
+CLOCK = tick.0;
+CLOCK2 = tick.tock.0;
+CLOCK3 = tock.tick.0;
+CLOCK4 = tick.CLOCK4;
+CLOCK5 = tick.tock.CLOCK5;
+// vending machines introduce choice
+VM1 = in50c.outCoke.in20c.outMars.VM1;
+VM2 = in50c.outCoke.VM2 + in20c.outMars.VM2;
+VM3 = in50c.(outCoke.VM3 + outPepsi.VM3);
+VM4 = in50c.outCoke.VM4 + in50c.outPepsi.VM4;
+//parallel composition
+TICLK = tick.TICLK;
+TOCLK = tock.TOCLK;
+CCLOCK = TICLK | TOCLK;
+ACLOCK = tick.beep.0 | tock.0;
+ACLOCK2 = tock.tick.beep.0 + tick.(tock.beep.0 + beep.tock.0);
+//relay racek
+RACE = RUN1 | RUN2;
+RUN1 = start.baton.0;
+RUN2 = 'baton.finish.0;
+RACEc = (RUN1 | RUN2)\baton;
+//glutton
+MAN = 'tick.eat.MAN;
+EXAMPLE = (MAN | CLOCK4)\tick;
+//value passing CCS with buffers
+BUFF = 'in(x).out(x).BUFF;
+//merging two channels
+MERGE = 'in1(x).out(x).MERGE + 'in2(x).out(x).MERGE;
+//guards and parameterised processes with fair merge
+FMERGE = 'in1(x).'in2(y).FMERGEo(x,y);
+FMERGEo(x,y) = [x<y]out(x).'in1(x).FMERGEo(x,y) + [x>=y]out(y).'in2(y).FMERGEo(x,y);
+//arithmetic
+EVENS = STEP2(0);
+STEP2(n) = out(n).STEP2(n + 2); 
+ODDS = STEP2(1);
+ORDERED_NATS = (FMERGE | EVENS[in1/out] | ODDS[in2/out])\in1\in2;
+UNFAIR_NATS  = (MERGE | EVENS[in1/out] | ODDS[in2/out])\in1\in2;
+//global state
+var X = 1;
+var Y = 1;
+var Z = 2;
+FIBS = {Z:=X+Y}{X:=Y}{Y:=Z}out(X).FIBS;
+//functions
+fun factorial(n) = if n == 0 then 1 else n * factorial(n-1);
+FACTORIALS = FACTS(0);
+FACTS(n) = out(factorial(n)).FACTS(n+1);

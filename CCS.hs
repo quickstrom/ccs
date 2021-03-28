@@ -154,11 +154,14 @@ isComm (Coaction a ls) (Action a' ts) = nameOf a == nameOf a' && length ls == le
 isComm _ _ = False
 
 available :: (Equations, State, Functions) -> CCS -> [Action]
+available (_,s,fs) (Act (Action n es)  _) = [Action n (map (Lit . evaluate s fs) es)]
 available _ (Act a _) = [a]
 available env@(_, s, fs) (Guard g p) = case evaluate s fs g of
   B True -> available env p
   _      -> []
-available env (Assignment _ _ p) = available env p
+available env@(es,s, fs) (Assignment n e p) = if M.member (nameOf n) s then
+   available (es,M.insert (nameOf n) (evaluate s fs e) s,fs) p
+ else eerror (show (posOf n) ++ ": State variable " ++ nameOf n ++ " not declared/initialised")
 available env (Choice p q) = available env p ++ available env q
 available env (Parallel p q) = 
   let a1 = available env p 
@@ -179,14 +182,13 @@ available (es,s,fs) (Process n args) = case M.lookup (nameOf n) es of
    Nothing -> eerror $ show (posOf n) ++ ": cannot find process " ++ nameOf n
    Just (names,body)
      | length names /= length args -> eerror $ show (posOf n) ++ ": process " ++ nameOf n ++ " takes a different number of arguments"
-     | otherwise ->  
-        let s' = M.union (M.fromList (zip (map nameOf names) (map (evaluate s fs) args))) s 
-         in available (es,s',fs) body
+     | otherwise -> available (es,s,fs) $ substitute (zip (map nameOf names) (map (Lit . evaluate s fs) args)) body
+        
 available _ Stop = []
 
 type Step = Action' Value Value
 
-substituteAction :: [(String, Value)] -> Action -> Action
+substituteAction :: [(String, Expr)] -> Action -> Action
 substituteAction s (Action n es) = Action n (map (substituteExpr s) es)
 substituteAction s a = a
 
@@ -194,14 +196,17 @@ substituteExpr s (Prim pos o es) = Prim pos o (map (substituteExpr s) es)
 substituteExpr s (Call n es) = Call n (map (substituteExpr s) es)
 substituteExpr s (If pos e1 e2 e3)  = If pos (substituteExpr s e1) (substituteExpr s e2) (substituteExpr s e3)
 substituteExpr s (Var n) = case lookup (nameOf n) s of
-  Just val -> Lit val
+  Just val -> val
   _        -> Var n
 substituteExpr s e = e
 
 
 
-substitute :: [(String, Value)] -> CCS -> CCS
-substitute s (Act a p) = Act (substituteAction s a) (substitute s p)
+substitute :: [(String, Expr)] -> CCS -> CCS
+substitute s (Act a p) = Act (substituteAction s a) (substitute (deshadow s) p)
+  where
+    names = case a of Coaction _ ns ->  map nameOf ns; _ -> []
+    deshadow = filter ((`notElem` names) . fst)
 substitute s (Guard e p) = Guard (substituteExpr s e) (substitute s p)
 substitute s (Assignment n e p) = Assignment n (substituteExpr s e) (substitute s p)
 substitute s (Choice p q) = Choice (substitute s p) (substitute s q)
@@ -221,9 +226,12 @@ step (_,fs) (s, Act (Action a exprs) p) (Action a' vals)
   | nameOf a == nameOf a' && map (evaluate s fs) exprs == vals = [(s,p)]
   | otherwise = []
 step (_,fs) (s, Act (Coaction a names) p) (Coaction a' vals)
-  | nameOf a == nameOf a' && length names == length vals = [(s, substitute (zip (map nameOf names) vals) p)]
+  | nameOf a == nameOf a' && length names == length vals = [(s, substitute (zip (map nameOf names) (map Lit vals)) p)]
   | otherwise = []
 step _ (_, Act {}) _ = []
+step env@(_, fs) (s, Guard g p) act = case evaluate s fs g of
+  B True -> step env (s, p) act
+  _      -> []
 step env@(_,fs) (s, Assignment n e p) act = if M.member (nameOf n) s then
    step env (M.insert (nameOf n) (evaluate s fs e) s, p) act
  else eerror (show (posOf n) ++ ": State variable " ++ nameOf n ++ " not declared/initialised")
@@ -257,8 +265,9 @@ step env (s, Relabel p n m) act = map (fmap (\p -> Relabel p n m)) (step env (s,
 step env@(es,fs) (s, Process n args) act = case M.lookup (nameOf n) es of 
    Nothing -> eerror $ show (posOf n) ++ ": Process not found " ++ nameOf n
    Just (ns, body) | length ns /= length args -> eerror $ show (posOf n) ++ ": Process " ++ nameOf n ++ " doesn't have the right number of arguments"
-   Just (ns, body) -> let vals = map (evaluate s fs) args in step env (s, substitute (zip (map nameOf ns) vals) body) act
+   Just (ns, body) -> let vals = map (evaluate s fs) args in step env (s, substitute (zip (map nameOf ns) (map Lit vals)) body) act
 step _ (_, Stop) _ = []
+step _ (_, p) a = error $ show (p,a)
 
 toEnvs :: [Decl] -> (Equations, Functions, State)
 toEnvs ds = let es = foldMap (\x -> case x of Equation n args b -> M.fromList [(nameOf n,(args,b))]; _ -> M.empty) ds
@@ -317,15 +326,15 @@ toEnvs ds = let es = foldMap (\x -> case x of Equation n args b -> M.fromList [(
                 , [ primop "==" Equal AssocNone
                   , primop "!=" NotEqual AssocNone
                   , primop "<=" LessEq AssocNone
-                  , primop "<" NotEqual AssocNone 
-                  , primop ">=" LessEq AssocNone
-                  , primop ">" NotEqual AssocNone
+                  , primop "<" Less AssocNone 
+                  , primop ">=" GreaterEq AssocNone
+                  , primop ">" Greater AssocNone
                   ]
-                , [primop "&&" Or AssocLeft]
+                , [primop "&&" And AssocLeft]
                 , [primop "||" Or AssocLeft]
                 ]
 
-    ccs = buildExpressionParser ccsTable ccsTerm
+    ccs = buildExpressionParser ccsTable (ccsSubterm >>= ccsTerm)
        <?> "process expression"
 
     ccsAtom = T.parens lexer ccs
@@ -340,9 +349,8 @@ toEnvs ds = let es = foldMap (\x -> case x of Equation n args b -> M.fromList [(
      <|> T.braces lexer (Assignment <$> upperName <* T.reservedOp lexer ":=" <*> expr) <*> ccsSubterm
      <|> ccsAtom
 
-    ccsTerm = do
-      st <- ccsSubterm
-      restrictPostfix st <|> renamePostfix st <|> pure st
+    ccsTerm st = do
+      (restrictPostfix st >>= ccsTerm) <|> (renamePostfix st >>= ccsTerm) <|> pure st
 
     ccsTable = [ 
                  [binary "+" Choice AssocLeft]
