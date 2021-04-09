@@ -4,7 +4,7 @@ import Text.Parsec
 import System.Environment
 import Text.Read hiding (step)
 import System.Console.Haskeline
-import System.Console.Haskeline.MonadException
+import Control.Monad.Catch
 
 main :: IO ()
 main = getArgs >>= \args ->
