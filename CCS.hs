@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 module CCS where
 import qualified Data.Map as M
 import Data.List
@@ -62,8 +63,8 @@ prettyAction :: Action -> String
 prettyAction (Action n []) = nameOf n
 prettyAction (Coaction n []) = "'" ++ nameOf n
 prettyAction Tau = "tau"
-prettyAction (Action n args) = nameOf n ++ "(" ++ concat (intersperse ", " (map prettyExpr args)) ++ ")"
-prettyAction (Coaction n args) = "'" ++  nameOf n ++ "(" ++ concat (intersperse ", " (map nameOf args)) ++ ")"
+prettyAction (Action n args) = nameOf n ++ "(" ++ intercalate ", " (map prettyExpr args) ++ ")"
+prettyAction (Coaction n args) = "'" ++  nameOf n ++ "(" ++ intercalate ", " (map nameOf args) ++ ")"
 
 prettyExpr :: Expr -> String
 prettyExpr (Lit l) = prettyLit l
@@ -86,7 +87,7 @@ prettyExpr (Prim p o [e1,e2]) = "(" ++ prettyExpr e1 ++ " " ++ opSym o ++ " " ++
       Or -> "||" 
       Concat -> "." 
       Not -> "!"
-prettyExpr (Call n es) = nameOf n ++ "(" ++ concat (intersperse ", " (map prettyExpr es))  ++ ")"
+prettyExpr (Call n es) = nameOf n ++ "(" ++ intercalate ", " (map prettyExpr es)  ++ ")"
 prettyExpr (If _ e1 e2 e3) = "(if " ++ prettyExpr e1 ++ " then " ++ prettyExpr e2 ++ " else " ++ prettyExpr e3 ++ ")" 
 prettyExpr (Var n) = nameOf n
 
@@ -103,14 +104,14 @@ pretty (Parallel p q) = "(" ++ pretty p ++ " | " ++ pretty q ++ ")"
 pretty (Restrict p n) = pretty p ++ "\\" ++ nameOf n
 pretty (Relabel p n m) = pretty p ++ "[" ++ nameOf n ++ "/" ++ nameOf m ++ "]"
 pretty (Process n []) = nameOf n
-pretty (Process n es) = nameOf n ++ "(" ++ concat (intersperse ", " (map prettyExpr es))  ++ ")"
+pretty (Process n es) = nameOf n ++ "(" ++ intercalate ", " (map prettyExpr es)  ++ ")"
 pretty Stop = "0"
 
 prettyDecl :: Decl -> String
 prettyDecl (Equation n [] p) = nameOf n ++ " = " ++ pretty p  ++ ";"
-prettyDecl (Equation n ns p) = nameOf n ++ "(" ++ concat (intersperse ", " (map nameOf ns))  ++ ") = " ++ pretty p  ++ ";"
+prettyDecl (Equation n ns p) = nameOf n ++ "(" ++ intercalate ", " (map nameOf ns)  ++ ") = " ++ pretty p  ++ ";"
 prettyDecl (StateVar n e) = "var " ++ nameOf n ++ " = " ++ prettyExpr e ++ ";"
-prettyDecl (Function n ns p) = "fun " ++ nameOf n ++ "(" ++ concat (intersperse ", " (map nameOf ns))  ++ ") = " ++ prettyExpr p  ++ ";"
+prettyDecl (Function n ns p) = "fun " ++ nameOf n ++ "(" ++ intercalate  ", " (map nameOf ns)  ++ ") = " ++ prettyExpr p  ++ ";"
 
 type State = M.Map String Value
 type Functions = M.Map String ([Name], Expr)
@@ -134,7 +135,7 @@ evaluate s fs (Prim pos o es) = case (o, map (evaluate s fs) es) of
   (Concat, [S i, S j]) -> S (i ++ j)
   (Equal, [i, j]) -> B (i == j)
   (NotEqual, [i, j]) -> B (i /= j)
-  (o, args) -> eerror $ show pos ++ ": Type error, primop " ++ show o ++ " cannot take arguments " ++ concat (intersperse ", " (map prettyLit args))
+  (o, args) -> eerror $ show pos ++ ": Type error, primop " ++ show o ++ " cannot take arguments " ++ intercalate ", " (map prettyLit args)
 evaluate s fs (Call n es) = case M.lookup (nameOf n) fs of 
   Nothing -> eerror $ show (posOf n) ++ ": Function " ++ show (nameOf n) ++ " not found"
   Just (args,body) | length args == length es -> 
@@ -153,14 +154,14 @@ isComm (Action a ls) (Coaction a' ts) = nameOf a == nameOf a' && length ls == le
 isComm (Coaction a ls) (Action a' ts) = nameOf a == nameOf a' && length ls == length ts
 isComm _ _ = False
 
-available :: (Equations, State, Functions) -> CCS -> [Action]
-available (_,s,fs) (Act (Action n es)  _) = [Action n (map (Lit . evaluate s fs) es)]
+available :: (Equations, Functions, State) -> CCS -> [Action]
+available (_,fs,s) (Act (Action n es)  _) = [Action n (map (Lit . evaluate s fs) es)]
 available _ (Act a _) = [a]
-available env@(_, s, fs) (Guard g p) = case evaluate s fs g of
+available env@(_, fs, s) (Guard g p) = case evaluate s fs g of
   B True -> available env p
   _      -> []
-available env@(es,s, fs) (Assignment n e p) = if M.member (nameOf n) s then
-   available (es,M.insert (nameOf n) (evaluate s fs e) s,fs) p
+available env@(es, fs, s) (Assignment n e p) = if M.member (nameOf n) s then
+   available (es,fs,M.insert (nameOf n) (evaluate s fs e) s) p
  else eerror (show (posOf n) ++ ": State variable " ++ nameOf n ++ " not declared/initialised")
 available env (Choice p q) = available env p ++ available env q
 available env (Parallel p q) = 
@@ -178,11 +179,11 @@ available env (Relabel p n m) = map (rename (nameOf m)) (available env p)
    rename m (Action a args) | m == nameOf a = Action n args
    rename m (Coaction a args) | m == nameOf a = Coaction n args
    rename _ a = a
-available (es,s,fs) (Process n args) = case M.lookup (nameOf n) es of
+available (es,fs,s) (Process n args) = case M.lookup (nameOf n) es of
    Nothing -> eerror $ show (posOf n) ++ ": cannot find process " ++ nameOf n
    Just (names,body)
      | length names /= length args -> eerror $ show (posOf n) ++ ": process " ++ nameOf n ++ " takes a different number of arguments"
-     | otherwise -> available (es,s,fs) $ substitute (zip (map nameOf names) (map (Lit . evaluate s fs) args)) body
+     | otherwise -> available (es,fs,s) $ substitute (zip (map nameOf names) (map (Lit . evaluate s fs) args)) body
         
 available _ Stop = []
 
@@ -214,7 +215,7 @@ substitute s (Parallel p q) = Parallel (substitute s p) (substitute s q)
 substitute s (Restrict p n) = Restrict (substitute s p) n
 substitute s (Relabel p n m) = Relabel (substitute s p) n m
 substitute s (Process n es) = Process n (map (substituteExpr s) es)
-
+substitute s Stop = Stop
 
 evalAction :: State -> Functions -> Action' Expr Expr -> Step
 evalAction s fs (Action n es) = Action n (map (evaluate s fs) es)
@@ -237,12 +238,12 @@ step env@(_,fs) (s, Assignment n e p) act = if M.member (nameOf n) s then
  else eerror (show (posOf n) ++ ": State variable " ++ nameOf n ++ " not declared/initialised")
 step env (s, Choice a b) act = step env (s,a) act ++ step env (s,b) act
 step env@(es,fs) (s, Parallel a b) act
-   = map (fmap (flip Parallel b)) (step env (s,a) act)
-  ++ map (fmap (Parallel a)) (step env (s,b) act)
+   = map (fmap (`Parallel` b)) (step env (s,a) act)
+  ++ map (fmap (a `Parallel`)) (step env (s,b) act)
   ++ case act of Tau -> communication ; _ -> []
  where
-  a1 = available (es,s,fs) a 
-  a2 = available (es,s,fs) b
+  a1 = available (es,fs,s) a 
+  a2 = available (es,fs,s) b
   communication = concatMap communicate $ filter (uncurry isComm) ((,) <$> a1 <*> a2)
   communicate (Action n es, Coaction m ns) = do
        let vals = map (evaluate s fs) es
@@ -258,7 +259,7 @@ step env@(es,fs) (s, Parallel a b) act
 step env (s, Restrict p n) act = case act of
    Action n' _ | nameOf n == nameOf n' -> [] 
    Coaction n' _ | nameOf n == nameOf n' -> [] 
-   _ -> map (fmap (flip Restrict n)) (step env (s,p) act)
+   _ -> map (fmap (`Restrict` n)) (step env (s,p) act)
 step env (s, Relabel p n m) (Action n' args ) | nameOf n == nameOf n' = map (fmap (\p -> Relabel p n m)) (step env (s,p) (Action m args))
 step env (s, Relabel p n m) (Coaction n' args ) | nameOf n == nameOf n' = map (fmap (\p -> Relabel p n m)) (step env (s,p) (Coaction m args))
 step env (s, Relabel p n m) act = map (fmap (\p -> Relabel p n m)) (step env (s,p) act)
@@ -267,19 +268,19 @@ step env@(es,fs) (s, Process n args) act = case M.lookup (nameOf n) es of
    Just (ns, body) | length ns /= length args -> eerror $ show (posOf n) ++ ": Process " ++ nameOf n ++ " doesn't have the right number of arguments"
    Just (ns, body) -> let vals = map (evaluate s fs) args in step env (s, substitute (zip (map nameOf ns) (map Lit vals)) body) act
 step _ (_, Stop) _ = []
-step _ (_, p) a = error $ show (p,a)
+--step _ (_, p) a = error $ show (p,a)
 
 toEnvs :: [Decl] -> (Equations, Functions, State)
-toEnvs ds = let es = foldMap (\x -> case x of Equation n args b -> M.fromList [(nameOf n,(args,b))]; _ -> M.empty) ds
-                fs = foldMap (\x -> case x of Function n args b -> M.fromList [(nameOf n,(args,b))]; _ -> M.empty) ds
-                ss = foldMap (\x -> case x of StateVar n e -> M.fromList [(nameOf n, evaluate ss fs e)]; _ -> M.empty) ds
+toEnvs ds = let es = foldMap (\case Equation n args b -> M.fromList [(nameOf n,(args,b))]; _ -> M.empty) ds
+                fs = foldMap (\case Function n args b -> M.fromList [(nameOf n,(args,b))]; _ -> M.empty) ds
+                ss = foldMap (\case StateVar n e -> M.fromList [(nameOf n, evaluate ss fs e)]; _ -> M.empty) ds
              in (es,fs,ss)
 
 
 (white, parser, expression, process, valAction) = (ws, tl, expr, ccs, action')
   where
     tl = do ws
-            ds <- many (decl)
+            ds <- many decl
             eof
             return ds
     ws = T.whiteSpace lexer

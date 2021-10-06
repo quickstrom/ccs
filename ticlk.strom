@@ -1,0 +1,8 @@
+import control;
+import list;
+import ltl;
+action ~ready? = { id: "ready", args: [], event: true, timeout: false};
+let ~tickAvailable = exists x in `available`. x.id == "tick";
+action ~tick! = { id: "tick", args: [], event: false, timeout: false} when tickAvailable ;
+let ~property = next (always{50} (contains(tick!, happened) && tickAvailable));
+check property with *;
